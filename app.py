@@ -126,8 +126,18 @@ def tab_leaderboard():
     # Filter
     if sector_filter != "All":
         rows = [r for r in rows if r.get("sector") == sector_filter]
-    rows = [r for r in rows if (r.get("index_membership") or [index_filter]) and
-            (index_filter in (r.get("index_membership") or []))]
+
+    def _has_index(r, idx):
+        membership = r.get("index_membership") or []
+        if isinstance(membership, str):
+            try:
+                import json as _j
+                membership = _j.loads(membership)
+            except Exception:
+                membership = []
+        return idx in membership
+
+    rows = [r for r in rows if _has_index(r, index_filter)]
     rows = [r for r in rows if (r.get("composite_score") or 0) >= min_score]
 
     if not rows:

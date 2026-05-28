@@ -183,21 +183,41 @@ def upsert_score(row: dict) -> None:
 
 
 def get_scores_leaderboard(quarter: str) -> list[dict]:
-    """All company scores for a given quarter, joined with company metadata."""
+    """All company scores for a given quarter, merged with company metadata."""
     sb = get_client()
-    res = sb.table("re_scores")\
-            .select("*, re_companies(name, sector, industry, index_membership)")\
-            .eq("quarter", quarter)\
-            .order("composite_score", desc=True)\
-            .execute()
+
+    # ── scores ───────────────────────────────────────────────────────────
+    s_res = sb.table("re_scores")\
+              .select("*")\
+              .eq("quarter", quarter)\
+              .order("composite_score", desc=True)\
+              .execute()
+    scores = s_res.data or []
+    if not scores:
+        return []
+
+    # ── companies (separate query — no FK needed) ─────────────────────
+    c_res = sb.table("re_companies")\
+              .select("ticker,name,sector,industry,index_membership")\
+              .eq("is_active", True)\
+              .execute()
+    company_map = {c["ticker"]: c for c in (c_res.data or [])}
+
     rows = []
-    for r in (res.data or []):
-        co = r.pop("re_companies", {}) or {}
-        r["name"]             = co.get("name", r["ticker"])
-        r["sector"]           = co.get("sector", "—")
-        r["industry"]         = co.get("industry", "—")
-        r["index_membership"] = co.get("index_membership", [])
-        rows.append(r)
+    for s in scores:
+        co   = company_map.get(s["ticker"], {})
+        idx  = co.get("index_membership") or []
+        # Supabase JSONB may return a list or a JSON string
+        if isinstance(idx, str):
+            try:
+                idx = json.loads(idx)
+            except Exception:
+                idx = []
+        s["name"]             = co.get("name", s["ticker"])
+        s["sector"]           = co.get("sector", "—")
+        s["industry"]         = co.get("industry", "—")
+        s["index_membership"] = idx
+        rows.append(s)
     return rows
 
 

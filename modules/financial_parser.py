@@ -28,6 +28,14 @@ SESSION_HEADERS  = {
 REQUEST_TIMEOUT  = 20
 DEFAULT_DELAY    = 2.5          # seconds between requests — be polite
 
+# Tickers whose Screener.in URL differs from the NSE ticker
+SCREENER_URL_MAP = {
+    "MM":         "M%26M",       # M&M encoded
+    "TATAMOTORS": "TATA-MOTORS-EQ",  # alternate form; fallback standalone
+    "LTIM":       "LTIMINDTREE", # post-merger name on Screener
+    "BAJAJ-AUTO": "BAJAJ-AUTO",  # hyphen is fine in Screener URLs
+}
+
 
 # ── quarter helpers ───────────────────────────────────────────────────────────
 
@@ -94,19 +102,26 @@ def fetch_financials(ticker: str, session: requests.Session) -> list[dict]:
     Fetch quarterly P&L data for *ticker* from Screener.in.
     Returns a list of dicts (one per quarter), newest first.
     """
-    for suffix in ["/consolidated/", "/"]:
-        url = f"{SCREENER_BASE}/{ticker}{suffix}"
-        try:
-            resp = session.get(url, timeout=REQUEST_TIMEOUT)
-            if resp.status_code == 404:
-                continue
-            resp.raise_for_status()
-            rows = _parse_quarterly_table(resp.text, ticker)
-            if rows:
-                logger.info(f"{ticker}: scraped {len(rows)} quarters from {url}")
-                return rows
-        except requests.RequestException as e:
-            logger.warning(f"{ticker}: request error at {url}: {e}")
+    url_ticker = SCREENER_URL_MAP.get(ticker, ticker)
+    candidates = [url_ticker]
+    # Also try the original ticker if different
+    if url_ticker != ticker:
+        candidates.append(ticker)
+
+    for t in candidates:
+        for suffix in ["/consolidated/", "/"]:
+            url = f"{SCREENER_BASE}/{t}{suffix}"
+            try:
+                resp = session.get(url, timeout=REQUEST_TIMEOUT)
+                if resp.status_code == 404:
+                    continue
+                resp.raise_for_status()
+                rows = _parse_quarterly_table(resp.text, ticker)
+                if rows:
+                    logger.info(f"{ticker}: scraped {len(rows)} quarters from {url}")
+                    return rows
+            except requests.RequestException as e:
+                logger.warning(f"{ticker}: request error at {url}: {e}")
     logger.error(f"{ticker}: could not fetch financials from Screener.in")
     return []
 
