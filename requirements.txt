@@ -1,0 +1,11 @@
+streamlit>=1.32.0
+supabase>=2.3.0
+requests>=2.31.0
+beautifulsoup4>=4.12.2
+PyMuPDF>=1.23.0
+anthropic>=0.26.0
+pandas>=2.1.0
+plotly>=5.18.0
+python-dotenv>=1.0.0
+breeze-connect>=1.0.53
+lxml>=5.1.0
