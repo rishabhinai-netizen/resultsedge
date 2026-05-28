@@ -165,7 +165,6 @@ def tab_leaderboard():
     sort_by = st.selectbox(
         "Sort by",
         ["Score"] + [lbl for _, lbl in SCORE_COLS],
-        horizontal=True,
     )
     df = df.sort_values(sort_by, ascending=False).reset_index(drop=True)
     df["Rank"] = range(1, len(df) + 1)
