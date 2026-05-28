@@ -30,8 +30,9 @@ def get_client() -> Client:
 
 def get_config(key: str, default: str = "") -> str:
     sb = get_client()
-    row = sb.table("re_config").select("value").eq("key", key).maybe_single().execute()
-    return row.data["value"] if row.data else default
+    res = sb.table("re_config").select("value").eq("key", key).limit(1).execute()
+    rows = res.data or []
+    return rows[0]["value"] if rows else default
 
 
 def set_config(key: str, value: str) -> None:
@@ -275,11 +276,12 @@ def log_pipeline_end(log_id: int, status: str, processed: list,
     start_res = sb.table("re_pipeline_logs")\
                   .select("started_at")\
                   .eq("id", log_id)\
-                  .maybe_single()\
+                  .limit(1)\
                   .execute()
     duration = None
-    if start_res.data:
-        st_dt = datetime.fromisoformat(start_res.data["started_at"].replace("Z", "+00:00"))
+    rows = start_res.data or []
+    if rows:
+        st_dt = datetime.fromisoformat(rows[0]["started_at"].replace("Z", "+00:00"))
         duration = int((datetime.now(timezone.utc) - st_dt).total_seconds())
 
     sb.table("re_pipeline_logs").update({
