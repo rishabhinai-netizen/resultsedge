@@ -117,9 +117,10 @@ def get_concall(ticker: str, quarter: str) -> dict | None:
             .select("*")\
             .eq("ticker", ticker)\
             .eq("quarter", quarter)\
-            .maybe_single()\
+            .limit(1)\
             .execute()
-    return res.data
+    rows = res.data or []
+    return rows[0] if rows else None
 
 
 def get_concalls_for_ticker(ticker: str, limit: int = 4) -> list[dict]:
@@ -206,9 +207,10 @@ def get_score(ticker: str, quarter: str) -> dict | None:
             .select("*")\
             .eq("ticker", ticker)\
             .eq("quarter", quarter)\
-            .maybe_single()\
+            .limit(1)\
             .execute()
-    return res.data
+    rows = res.data or []
+    return rows[0] if rows else None
 
 
 # ── technical ─────────────────────────────────────────────────────────────────
@@ -228,9 +230,9 @@ def get_latest_technical(ticker: str) -> dict | None:
             .eq("ticker", ticker)\
             .order("as_of_date", desc=True)\
             .limit(1)\
-            .maybe_single()\
             .execute()
-    return res.data
+    rows = res.data or []
+    return rows[0] if rows else None
 
 
 # ── pipeline logs ─────────────────────────────────────────────────────────────
