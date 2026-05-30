@@ -490,6 +490,24 @@ def tab_pipeline():
     all_cos = db.get_all_companies()
     tickers = [c["ticker"] for c in all_cos] if all_cos else []
 
+    # Batch size control for concalls (most expensive step)
+    with st.expander("⚙️ Batch settings", expanded=False):
+        bc1, bc2 = st.columns(2)
+        with bc1:
+            batch_size = st.number_input(
+                "Concall batch size (companies per run)",
+                min_value=1, max_value=50, value=10, step=5,
+                help="Run concalls in smaller batches to avoid timeouts on Streamlit Cloud"
+            )
+        with bc2:
+            batch_offset = st.number_input(
+                "Start from company #",
+                min_value=1, max_value=max(len(tickers),1), value=1, step=1,
+                help="Resume from a specific company index"
+            )
+        batch_tickers = tickers[int(batch_offset)-1 : int(batch_offset)-1+int(batch_size)]
+        st.caption(f"Will process: {', '.join(batch_tickers) if batch_tickers else '—'}")
+
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
@@ -515,13 +533,13 @@ def tab_pipeline():
             prog = st.progress(0)
             def _cb3(i, total, t):
                 prog.progress((i+1)/total, text=f"{t} ({i+1}/{total})")
-            with st.spinner("Parsing concall PDFs..."):
-                r = pl.run_concalls(tickers, progress_cb=_cb3)
+            with st.spinner(f"Parsing {len(batch_tickers)} companies..."):
+                r = pl.run_concalls(batch_tickers, progress_cb=_cb3)
             prog.empty()
             st.success(f"✅ {len(r['processed'])} companies, "
                        f"{r.get('quarters_parsed',0)} quarters")
             if r["failed"]:
-                st.warning(f"Failed: {', '.join(r['failed'])}")
+                st.warning(f"Failed: {', '.join(str(x) for x in r['failed'])}")
 
     with col4:
         if st.button("📈 Technicals", use_container_width=True):
@@ -574,7 +592,8 @@ def tab_pipeline():
             "Processed": len(lg.get("tickers_processed") or []),
             "Failed":    len(lg.get("tickers_failed")    or []),
             "Records":   lg.get("records_inserted"),
-            "Duration":  f"{lg.get('duration_seconds','—')}s",
+            "Duration":  (f"{lg.get('duration_seconds')}s"
+                          if lg.get('duration_seconds') is not None else "—"),
             "Started":   (lg.get("started_at","")[:16].replace("T"," ")
                           if lg.get("started_at") else "—"),
         } for lg in logs]
