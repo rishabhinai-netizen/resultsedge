@@ -485,56 +485,120 @@ def tab_pipeline():
             st.write("           re_guidance · re_scores · re_technical")
 
     st.divider()
-    st.markdown("#### Run Pipeline Steps")
 
-    all_cos = db.get_all_companies()
+    # ── concall cache status ───────────────────────────────────────────────
+    st.markdown("#### 📊 Concall Cache Status")
+    aq = _active_quarter()
+    try:
+        all_parsed = db.get_client().table("re_concall")\
+                       .select("ticker,quarter,parsed_at")\
+                       .execute().data or []
+        parsed_this_q = {r["ticker"] for r in all_parsed
+                         if r.get("quarter") == aq and r.get("parsed_at")}
+        all_cos = db.get_all_companies()
+        total_cos = len(all_cos)
+        st.info(
+            f"**{aq}:** {len(parsed_this_q)}/{total_cos} companies already parsed "
+            f"and cached in Supabase. "
+            f"Running Concalls will **skip** all {len(parsed_this_q)} cached — "
+            f"only {total_cos - len(parsed_this_q)} new API calls needed."
+        )
+        if parsed_this_q:
+            with st.expander(f"✅ Already cached for {aq} ({len(parsed_this_q)} companies)", expanded=False):
+                st.write(", ".join(sorted(parsed_this_q)))
+    except Exception:
+        all_cos = db.get_all_companies()
+        parsed_this_q = set()
+
     tickers = [c["ticker"] for c in all_cos] if all_cos else []
 
-    # Batch size control for concalls (most expensive step)
-    with st.expander("⚙️ Batch settings", expanded=False):
-        bc1, bc2 = st.columns(2)
-        with bc1:
+    st.divider()
+    st.markdown("#### Run Pipeline Steps")
+
+    # ── batch and index controls ───────────────────────────────────────────
+    with st.expander("⚙️ Batch & Index settings", expanded=True):
+        bs1, bs2, bs3, bs4 = st.columns(4)
+        with bs1:
+            index_choice = st.selectbox(
+                "Index universe",
+                ["nifty50", "nifty200"],
+                key="pipe_index",
+                help="nifty50 = 50 companies, nifty200 = all 200"
+            )
+        with bs2:
             batch_size = st.number_input(
-                "Concall batch size (companies per run)",
-                min_value=1, max_value=50, value=10, step=5,
-                help="Run concalls in smaller batches to avoid timeouts on Streamlit Cloud"
+                "Batch size", min_value=1, max_value=200, value=10, step=5,
+                key="pipe_batch",
+                help="Companies per run. Use 10 for concalls, 50 for financials"
             )
-        with bc2:
+        with bs3:
             batch_offset = st.number_input(
-                "Start from company #",
-                min_value=1, max_value=max(len(tickers),1), value=1, step=1,
-                help="Resume from a specific company index"
+                "Start from #", min_value=1, max_value=200, value=1, step=1,
+                key="pipe_offset",
+                help="Start from company #N. Use to resume mid-way"
             )
-        batch_tickers = tickers[int(batch_offset)-1 : int(batch_offset)-1+int(batch_size)]
-        st.caption(f"Will process: {', '.join(batch_tickers) if batch_tickers else '—'}")
+        with bs4:
+            force_refresh = st.toggle(
+                "Force re-parse",
+                value=False,
+                key="pipe_force",
+                help="OFF = skip companies already in DB (saves API tokens). ON = re-parse everything"
+            )
+
+        # Filter by selected index
+        index_tickers = [
+            c["ticker"] for c in all_cos
+            if index_choice in _parse_membership(c.get("index_membership"))
+        ]
+        batch_tickers = index_tickers[int(batch_offset)-1 : int(batch_offset)-1+int(batch_size)]
+
+        not_cached = [t for t in batch_tickers if t not in parsed_this_q]
+        st.caption(
+            f"📋 Universe: **{len(index_tickers)}** companies ({index_choice}) · "
+            f"Batch: **{len(batch_tickers)}** companies · "
+            f"Will call Claude API for: **{len(not_cached)}** "
+            f"(skipping {len(batch_tickers)-len(not_cached)} already cached)"
+        )
+        if batch_tickers:
+            st.caption(f"Batch: {', '.join(batch_tickers)}")
+
+    st.divider()
 
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
-        if st.button("🌱 Seed", use_container_width=True):
-            with st.spinner("Seeding..."):
-                n = pl.seed_companies()
+        seed_idx = st.selectbox("Seed index", ["all","nifty50","nifty200"],
+                                key="pipe_seed_idx", label_visibility="collapsed")
+        if st.button("🌱 Seed", use_container_width=True,
+                     help="Seed nifty50, nifty200, or all companies into DB"):
+            with st.spinner(f"Seeding {seed_idx}..."):
+                n = pl.seed_companies(index=seed_idx)
             st.success(f"Seeded {n}")
 
     with col2:
-        if st.button("📑 Financials", use_container_width=True):
+        if st.button("📑 Financials", use_container_width=True,
+                     help="Fetch quarterly P&L from Screener.in"):
             prog = st.progress(0)
             def _cb2(i, total, t):
                 prog.progress((i+1)/total, text=f"{t} ({i+1}/{total})")
-            with st.spinner("Fetching Screener.in..."):
-                r = pl.run_financials(tickers, progress_cb=_cb2)
+            with st.spinner(f"Fetching {len(batch_tickers)} companies..."):
+                r = pl.run_financials(batch_tickers, progress_cb=_cb2)
             prog.empty()
             st.success(f"✅ {len(r['processed'])} ok, {len(r['failed'])} failed")
             if r["failed"]:
-                st.warning(f"Failed: {', '.join(r['failed'])}")
+                st.warning(f"Failed: {', '.join(str(x) for x in r['failed'])}")
 
     with col3:
-        if st.button("🎙️ Concalls", use_container_width=True):
+        if st.button("🎙️ Concalls", use_container_width=True,
+                     help="Parse concall PDFs via Claude AI. Skips already-cached companies unless Force re-parse is ON"):
             prog = st.progress(0)
             def _cb3(i, total, t):
                 prog.progress((i+1)/total, text=f"{t} ({i+1}/{total})")
-            with st.spinner(f"Parsing {len(batch_tickers)} companies..."):
-                r = pl.run_concalls(batch_tickers, progress_cb=_cb3)
+            with st.spinner(f"Parsing {len(batch_tickers)} companies "
+                            f"({'force refresh' if force_refresh else 'smart cache'})..."):
+                r = pl.run_concalls(batch_tickers,
+                                    force_refresh=force_refresh,
+                                    progress_cb=_cb3)
             prog.empty()
             st.success(f"✅ {len(r['processed'])} companies, "
                        f"{r.get('quarters_parsed',0)} quarters")
@@ -542,37 +606,39 @@ def tab_pipeline():
                 st.warning(f"Failed: {', '.join(str(x) for x in r['failed'])}")
 
     with col4:
-        if st.button("📈 Technicals", use_container_width=True):
+        if st.button("📈 Technicals", use_container_width=True,
+                     help="Fetch Breeze API price/momentum data"):
             prog = st.progress(0)
             def _cb4(i, total, t):
                 prog.progress((i+1)/total, text=f"{t} ({i+1}/{total})")
-            with st.spinner("Fetching Breeze API..."):
-                r = pl.run_technicals(tickers, progress_cb=_cb4)
+            with st.spinner(f"Fetching {len(batch_tickers)} companies..."):
+                r = pl.run_technicals(batch_tickers, progress_cb=_cb4)
             prog.empty()
             st.success(f"✅ {len(r['processed'])} processed")
             if r["failed"]:
-                st.warning(f"Failed: {', '.join(r['failed'])}")
+                st.warning(f"Failed: {', '.join(str(x) for x in r['failed'])}")
 
     with col5:
-        if st.button("🧮 Score", use_container_width=True, type="primary"):
+        if st.button("🧮 Score", use_container_width=True, type="primary",
+                     help="Compute all 10 parameters + composite score"):
             quarter = _active_quarter()
             prog    = st.progress(0)
             def _cb5(i, total, t):
                 prog.progress((i+1)/total, text=f"{t} ({i+1}/{total})")
             with st.spinner(f"Scoring {quarter}..."):
-                r = pl.run_scoring(tickers, quarter, progress_cb=_cb5)
+                r = pl.run_scoring(index_tickers, quarter, progress_cb=_cb5)
             prog.empty()
             db.set_config("last_full_run",
                           datetime.datetime.now().strftime("%d %b %Y %H:%M"))
             st.success(f"✅ {len(r['processed'])} scored")
 
     st.divider()
-    st.markdown("#### 🚀 Full Pipeline")
+    st.markdown("#### 🚀 Full Pipeline (all steps, uses batch settings above)")
     if st.button("▶ Run full pipeline", type="primary"):
         with st.status("Running...", expanded=True) as status:
             def _cbf(i, total, t):
                 st.write(f"→ {t} ({i+1}/{total})")
-            result = pl.run_full(progress_cb=_cbf)
+            result = pl.run_full(tickers=batch_tickers, progress_cb=_cbf)
             db.set_config("last_full_run",
                           datetime.datetime.now().strftime("%d %b %Y %H:%M"))
             status.update(label="✅ Complete!", state="complete")

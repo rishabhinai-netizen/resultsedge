@@ -278,7 +278,14 @@ def _build_guidance_rows(ticker: str, quarter: str, extracted: dict) -> list[dic
 
 def process_ticker(ticker: str, company_name: str,
                    target_quarters: list[str] | None = None,
-                   max_quarters: int = 4) -> tuple[list[str], list[str]]:
+                   max_quarters: int = 4,
+                   force_refresh: bool = False) -> tuple[list[str], list[str]]:
+    """
+    Download and parse concalls for a company.
+    SMART CACHE: If re_concall already has a complete record (ai_summary not null)
+    for a quarter, it is SKIPPED — no PDF download, no Claude API call.
+    Set force_refresh=True to re-parse even if record exists.
+    """
     session = requests.Session()
     session.headers.update(HEADERS)
 
@@ -291,10 +298,22 @@ def process_ticker(ticker: str, company_name: str,
     else:
         filings = filings[:max_quarters]
 
-    processed, failed = [], []
+    processed, failed, skipped = [], [], []
+
     for filing in filings:
         q       = filing["quarter"]
         pdf_url = filing["pdf_url"]
+
+        # ── SMART CACHE CHECK ──────────────────────────────────────────────
+        if not force_refresh:
+            existing = db.get_concall(ticker, q)
+            if existing and existing.get("ai_summary"):
+                logger.info(f"{ticker} {q}: already parsed ({existing.get('parsed_at','?')[:10]}), skipping.")
+                skipped.append(q)
+                processed.append(q)   # count as processed (data is there)
+                continue
+        # ──────────────────────────────────────────────────────────────────
+
         try:
             transcript = _download_and_extract_text(pdf_url, session)
             if len(transcript) < 200:
@@ -329,12 +348,15 @@ def process_ticker(ticker: str, company_name: str,
                 db.upsert_guidance(guidance_rows)
 
             processed.append(q)
-            logger.info(f"{ticker} {q}: OK — {len(guidance_rows)} guidance rows")
+            logger.info(f"{ticker} {q}: parsed OK — {len(guidance_rows)} guidance rows")
             time.sleep(0.5)
 
         except Exception as e:
             logger.error(f"{ticker} {q}: {e}")
             failed.append(q)
+
+    if skipped:
+        logger.info(f"{ticker}: {len(skipped)} quarters skipped (already in DB)")
 
     return processed, failed
 
@@ -344,6 +366,7 @@ def process_ticker(ticker: str, company_name: str,
 def run_for_companies(companies: list[dict],
                       target_quarters: list[str] | None = None,
                       max_quarters: int = 4,
+                      force_refresh: bool = False,
                       progress_cb=None) -> tuple[list[str], list[str], int]:
     processed_all, failed_all, total = [], [], 0
     for i, co in enumerate(companies):
@@ -352,7 +375,8 @@ def run_for_companies(companies: list[dict],
         if progress_cb:
             progress_cb(i, len(companies), ticker)
         try:
-            p, f = process_ticker(ticker, name, target_quarters, max_quarters)
+            p, f = process_ticker(ticker, name, target_quarters,
+                                   max_quarters, force_refresh)
             if p:
                 processed_all.append(ticker)
                 total += len(p)

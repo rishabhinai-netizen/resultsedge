@@ -16,13 +16,37 @@ from modules.scoring          import run_scoring_for_all
 logger = logging.getLogger(__name__)
 
 DATA_DIR     = Path(__file__).parent.parent / "data"
-NIFTY50_FILE = DATA_DIR / "nifty50.json"
+NIFTY50_FILE  = DATA_DIR / "nifty50.json"
+NIFTY200_FILE = DATA_DIR / "nifty200_additional.json"
 
 
-def seed_companies(filepath: Path = NIFTY50_FILE) -> int:
-    with open(filepath) as f:
-        companies = json.load(f)
-    inserted = db.upsert_companies(companies)
+def seed_companies(index: str = "all") -> int:
+    """
+    Seed company master. index='nifty50' | 'nifty200' | 'all'.
+    Nifty 50 companies are included in every higher index.
+    """
+    files = []
+    if index in ("nifty50", "all"):
+        files.append(NIFTY50_FILE)
+    if index in ("nifty200", "all") and NIFTY200_FILE.exists():
+        files.append(NIFTY200_FILE)
+
+    all_companies = []
+    for fp in files:
+        with open(fp) as f:
+            companies = json.load(f)
+            # Nifty 50 companies belong to all higher indexes too
+            if "nifty50" in str(fp):
+                for c in companies:
+                    m = c.get("index_membership", ["nifty50"])
+                    if "nifty50" not in m:
+                        m.append("nifty50")
+                    if "nifty200" not in m:
+                        m.append("nifty200")
+                    c["index_membership"] = m
+            all_companies.extend(companies)
+
+    inserted = db.upsert_companies(all_companies)
     logger.info(f"Seeded {inserted} companies.")
     return inserted
 
@@ -48,17 +72,19 @@ def run_financials(tickers=None, progress_cb=None) -> dict:
 
 
 def run_concalls(tickers=None, target_quarters=None,
-                 max_quarters=4, progress_cb=None) -> dict:
+                 max_quarters=4, force_refresh=False,
+                 progress_cb=None) -> dict:
     log_id = db.log_pipeline_start("concalls")
     p, f, n = [], [], 0
     try:
         companies = db.get_all_companies()
         if tickers:
             companies = [c for c in companies if c["ticker"] in tickers]
-        logger.info(f"[CONCALLS] {len(companies)} companies")
+        logger.info(f"[CONCALLS] {len(companies)} companies | force_refresh={force_refresh}")
         p, f, n = run_cc(companies,
                          target_quarters=target_quarters,
                          max_quarters=max_quarters,
+                         force_refresh=force_refresh,
                          progress_cb=progress_cb)
     except Exception as e:
         logger.error(f"[CONCALLS] Fatal: {e}")
