@@ -13,6 +13,7 @@ import streamlit as st
 
 from modules import db
 from modules import pipeline as pl
+from modules import equisense as eq
 
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -78,7 +79,7 @@ RAT_MAP = {
     "s10_valuation":         "s10_rationale",
 }
 
-QUARTERS_LIST = ["Q4FY26","Q3FY26","Q2FY26","Q1FY26",
+QUARTERS_LIST = ["Q1FY27","Q4FY26","Q3FY26","Q2FY26","Q1FY26",
                   "Q4FY25","Q3FY25","Q2FY25","Q1FY25"]
 
 
@@ -118,6 +119,54 @@ def _parse_membership(val) -> list:
 
 def _active_quarter() -> str:
     return db.get_config("active_quarter", "Q4FY26")
+
+
+def _render_equisense_panel(ticker: str, quarter: str, company_name: str) -> None:
+    """
+    Render the EquiSense AI narrative panel — a qualitative overlay
+    sourced independently of Screener/BSE-concall data.
+
+    IMPORTANT: This is display-only. Nothing here feeds re_scores or
+    any S1–S10 parameter. Kept as a separate, clearly-labeled source
+    so provenance is unambiguous and quarter-over-quarter scores stay
+    comparable (Screener/concall-only).
+
+    Data is pre-cached in re_equisense_cache (populated out-of-band —
+    see modules/equisense.py docstring). This function only reads the
+    cache; it never calls the EquiSense API directly, since that call
+    is only available via the chat-side MCP connector, not from a
+    deployed Streamlit backend.
+    """
+    st.markdown("#### 🧭 AI Research Narrative")
+    st.caption(
+        "Sourced from EquiSense — an independent AI research layer. "
+        "Qualitative context only; does not factor into the parameter scores above."
+    )
+
+    cached = eq.get_cached(ticker, quarter)
+    if not cached:
+        st.info(
+            f"No cached EquiSense narrative for {company_name} ({quarter}) yet. "
+            f"Ask Claude to refresh EquiSense coverage for this ticker."
+        )
+        return
+
+    fetched_at = cached.get("fetched_at", "")
+    st.caption(f"Last refreshed: {fetched_at[:16].replace('T', ' ')} UTC")
+    st.markdown(cached.get("answer_text", ""))
+
+    follow_ups = cached.get("follow_ups") or []
+    if isinstance(follow_ups, str):
+        try:
+            follow_ups = json.loads(follow_ups)
+        except Exception:
+            follow_ups = []
+    if follow_ups:
+        st.markdown("**Suggested follow-ups:**")
+        for fu in follow_ups:
+            st.markdown(f"- {fu}")
+
+    st.caption("🚀 Powered by equisense.ai")
 
 
 # ── leaderboard tab ───────────────────────────────────────────────────────────
@@ -335,6 +384,11 @@ def tab_company():
                     st.markdown(f"- {rk}")
     else:
         st.info(f"No concall data for {ticker} {quarter}. Run Concall pipeline.")
+
+    st.divider()
+
+    # ── EquiSense AI narrative (qualitative overlay — separate source) ─────
+    _render_equisense_panel(ticker, quarter, company_name)
 
     st.divider()
 
